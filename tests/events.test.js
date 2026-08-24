@@ -2,9 +2,24 @@
 
 const request = require('supertest');
 const app = require('../src/app');
-const store = require('../src/data/store');
+const {
+  reset,
+  disconnect,
+  VENUE_IDS,
+  EVENT_IDS,
+  ABSENT_UUID,
+  ORGANIZER_A,
+  ATTENDEE,
+  tokenFor,
+} = require('./helpers');
 
-beforeEach(() => store.reset());
+beforeEach(() => reset());
+afterAll(() => disconnect());
+
+// The seed alternates owners, so ORGANIZER_A owns the even-indexed events.
+// Writing to anything else is a BOLA case, covered in authorization.test.js.
+const organizer = () => ({ Authorization: `Bearer ${tokenFor(ORGANIZER_A)}` });
+const OWNED_EVENT = EVENT_IDS[0];
 
 describe('GET /v1/events', () => {
   it('paginates and reports the total for the whole matching set', async () => {
@@ -31,13 +46,20 @@ describe('GET /v1/events', () => {
     expect(res.body.total).toBe(6);
   });
 
+  it('orders by start time, not by insertion order', async () => {
+    const res = await request(app).get('/v1/events?limit=100');
+
+    const times = res.body.data.map((event) => new Date(event.startsAt).getTime());
+    expect(times).toEqual([...times].sort((a, b) => a - b));
+  });
+
   it('filters by venue, and total reflects the filtered set', async () => {
-    const res = await request(app).get('/v1/events?venue=ven_3&limit=2');
+    const res = await request(app).get(`/v1/events?venue=${VENUE_IDS[2]}&limit=2`);
 
     expect(res.status).toBe(200);
     expect(res.body.total).toBe(3);
     expect(res.body.data).toHaveLength(2);
-    expect(res.body.data.every((event) => event.venueId === 'ven_3')).toBe(true);
+    expect(res.body.data.every((event) => event.venueId === VENUE_IDS[2])).toBe(true);
   });
 
   it('filters by date range', async () => {
@@ -56,6 +78,16 @@ describe('GET /v1/events', () => {
     expect(res.body.error.details).toContainEqual({
       field: 'from',
       message: 'from must be earlier than or equal to to',
+    });
+  });
+
+  it('rejects a venue filter that is not a UUID', async () => {
+    const res = await request(app).get('/v1/events?venue=ven_3');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toContainEqual({
+      field: 'venue',
+      message: 'venue must be a UUID',
     });
   });
 
@@ -83,25 +115,32 @@ describe('GET /v1/events', () => {
 });
 
 describe('POST /v1/events', () => {
-  const valid = {
+  const valid = () => ({
     title: 'Intro to Testing',
-    venueId: 'ven_1',
+    venueId: VENUE_IDS[0],
     startsAt: '2026-09-20T18:00:00.000Z',
     capacity: 50,
-  };
+  });
 
-  it('creates an event with 201', async () => {
-    const res = await request(app).post('/v1/events').send(valid);
+  it('creates an event with 201 and persists it', async () => {
+    const res = await request(app).post('/v1/events').set(organizer()).send(valid());
 
     expect(res.status).toBe(201);
     expect(res.body.data).toMatchObject({ title: 'Intro to Testing', capacity: 50 });
     expect(res.body.data.id).toBeDefined();
+
+    // Read it back, so the assertion is about what Postgres stored rather than
+    // what the create handler happened to echo.
+    const fetched = await request(app).get(`/v1/events/${res.body.data.id}`);
+    expect(fetched.status).toBe(200);
+    expect(fetched.body.data.title).toBe('Intro to Testing');
   });
 
   it('rejects unknown body fields instead of silently dropping them', async () => {
     const res = await request(app)
       .post('/v1/events')
-      .send({ ...valid, capcity: 10 });
+      .set(organizer())
+      .send({ ...valid(), capcity: 10 });
 
     expect(res.status).toBe(400);
     expect(res.body.error.details).toContainEqual({
@@ -111,52 +150,98 @@ describe('POST /v1/events', () => {
   });
 
   it('reports every missing field at once', async () => {
-    const res = await request(app).post('/v1/events').send({});
+    const res = await request(app).post('/v1/events').set(organizer()).send({});
 
     expect(res.status).toBe(400);
     expect(res.body.error.details.length).toBeGreaterThanOrEqual(4);
   });
 
-  it('rejects a venueId that does not exist', async () => {
+  it('rejects a venueId that does not exist with 422, not a foreign key 500', async () => {
     const res = await request(app)
       .post('/v1/events')
-      .send({ ...valid, venueId: 'ven_999' });
+      .set(organizer())
+      .send({ ...valid(), venueId: ABSENT_UUID });
 
     expect(res.status).toBe(422);
+  });
+
+  it('rejects a venueId that is not a UUID with 400', async () => {
+    const res = await request(app)
+      .post('/v1/events')
+      .set(organizer())
+      .send({ ...valid(), venueId: 'ven_1' });
+
+    expect(res.status).toBe(400);
   });
 });
 
 describe('single event routes', () => {
   it('gets an event with 200', async () => {
-    const res = await request(app).get('/v1/events/evt_1');
+    const res = await request(app).get(`/v1/events/${OWNED_EVENT}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.data.id).toBe('evt_1');
+    expect(res.body.data.id).toBe(OWNED_EVENT);
   });
 
-  it('returns 404 for a missing event', async () => {
-    const res = await request(app).get('/v1/events/evt_999');
+  it('returns 404 for a well-formed id that is not in the table', async () => {
+    const res = await request(app).get(`/v1/events/${ABSENT_UUID}`);
 
     expect(res.status).toBe(404);
   });
 
+  it('returns 400 for an id that is not a UUID', async () => {
+    const res = await request(app).get('/v1/events/evt_1');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toContainEqual({
+      field: 'eventId',
+      message: 'eventId must be a UUID',
+    });
+  });
+
   it('updates an event with 200', async () => {
-    const res = await request(app).patch('/v1/events/evt_1').send({ capacity: 90 });
+    const res = await request(app)
+      .patch(`/v1/events/${OWNED_EVENT}`)
+      .set(organizer())
+      .send({ capacity: 90 });
 
     expect(res.status).toBe(200);
     expect(res.body.data.capacity).toBe(90);
   });
 
+  it('returns 404 when updating an event that does not exist', async () => {
+    const res = await request(app)
+      .patch(`/v1/events/${ABSENT_UUID}`)
+      .set(organizer())
+      .send({ capacity: 90 });
+
+    expect(res.status).toBe(404);
+  });
+
   it('rejects an empty update body', async () => {
-    const res = await request(app).patch('/v1/events/evt_1').send({});
+    const res = await request(app).patch(`/v1/events/${OWNED_EVENT}`).set(organizer()).send({});
 
     expect(res.status).toBe(400);
   });
 
   it('deletes an event with 200', async () => {
-    const res = await request(app).delete('/v1/events/evt_1');
+    const res = await request(app).delete(`/v1/events/${OWNED_EVENT}`).set(organizer());
 
     expect(res.status).toBe(200);
-    expect((await request(app).get('/v1/events/evt_1')).status).toBe(404);
+    expect((await request(app).get(`/v1/events/${OWNED_EVENT}`)).status).toBe(404);
+  });
+
+  it('takes the event bookings with it, by cascade', async () => {
+    const attendee = { Authorization: `Bearer ${tokenFor(ATTENDEE)}` };
+
+    const booked = await request(app)
+      .post('/v1/bookings')
+      .set(attendee)
+      .send({ eventId: OWNED_EVENT, seats: 1 });
+
+    await request(app).delete(`/v1/events/${OWNED_EVENT}`).set(organizer());
+
+    const res = await request(app).get(`/v1/bookings/${booked.body.data.id}`).set(attendee);
+    expect(res.status).toBe(404);
   });
 });

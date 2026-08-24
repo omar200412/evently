@@ -1,21 +1,30 @@
 'use strict';
 
 /**
- * Slice an already-filtered array into a page.
+ * The two halves of offset pagination, in one place.
  *
- * Order matters: callers must filter BEFORE calling this. `total` is the size
- * of the list handed in, so paginating first and filtering after would report
- * a total that describes the wrong set and break the client's page count.
+ * This used to slice an array, because the whole table lived in a Map. Against
+ * Postgres the slicing is done by OFFSET/LIMIT, so what is left worth sharing is
+ * the arithmetic and the response envelope — and those are worth sharing,
+ * because three repositories build the same `{ data, page, limit, total }` and
+ * an inconsistency between them would surface as one endpoint paginating
+ * differently from the others.
  */
-function paginate(items, { page, limit }) {
-  const start = (page - 1) * limit;
 
-  return {
-    data: items.slice(start, start + limit),
-    page,
-    limit,
-    total: items.length,
-  };
+/** Turn a 1-based page into the skip/take a query needs. */
+function pageParams({ page, limit }) {
+  return { skip: (page - 1) * limit, take: limit };
 }
 
-module.exports = paginate;
+/**
+ * Build the list response.
+ *
+ * `total` must be the size of the *filtered* set, not the table: it is what the
+ * client derives its page count from. Counting everything and paging a filtered
+ * subset would hand out page numbers that return nothing.
+ */
+function pageResult({ data, total, page, limit }) {
+  return { data, page, limit, total };
+}
+
+module.exports = { pageParams, pageResult };

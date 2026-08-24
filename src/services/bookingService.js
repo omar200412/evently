@@ -1,61 +1,37 @@
 'use strict';
 
-const store = require('../data/store');
+const bookingRepository = require('../repositories/bookingRepository');
 const ApiError = require('../utils/ApiError');
-const paginate = require('../utils/paginate');
-const eventService = require('./eventService');
+const { BOOKING_STATUS } = require('../domain');
 
-const STATUS = Object.freeze({
-  CONFIRMED: 'CONFIRMED',
-  CANCELLED: 'CANCELLED',
-});
+const { OUTCOME } = bookingRepository;
 
-function allBookings() {
-  return [...store.bookings.values()];
+/**
+ * List the caller's bookings.
+ *
+ * `userId` is a mandatory parameter, not an optional filter, and it comes from
+ * the token. That is the difference between a scoped collection and an
+ * information leak: an endpoint that lists everything and merely *offers* a user
+ * filter hands over every booking in the system to anyone who omits it — the
+ * collection-level form of BOLA, and the one most often missed, because the
+ * single-resource route usually gets the ownership check and the list does not.
+ */
+function list({ page, limit, eventId, status, userId }) {
+  return bookingRepository.listPaginated({ page, limit, eventId, status, userId });
 }
 
 /**
- * Seats already taken on an event.
+ * Fetch a booking the caller is entitled to see.
  *
- * Only CONFIRMED bookings count. Cancelled ones stay in the store for history
- * but must release their seats, otherwise a cancelled booking would keep an
- * event full forever.
+ * 404 rather than 403 for someone else's booking, for the same reason as
+ * events: a 403 would confirm the id is real. Note that the ownership check is
+ * inside getById rather than bolted onto each caller — cancel() goes through
+ * here too, so there is one place to get it right instead of two to keep in step.
  */
-function confirmedSeatsFor(eventId) {
-  return allBookings()
-    .filter((booking) => booking.eventId === eventId && booking.status === STATUS.CONFIRMED)
-    .reduce((sum, booking) => sum + booking.seats, 0);
-}
+async function getById(id, userId) {
+  const booking = await bookingRepository.findById(id);
 
-function findConfirmedBooking(eventId, userId) {
-  return allBookings().find(
-    (booking) =>
-      booking.eventId === eventId &&
-      booking.userId === userId &&
-      booking.status === STATUS.CONFIRMED
-  );
-}
-
-function list({ page, limit, eventId, status }) {
-  let bookings = allBookings();
-
-  if (eventId) {
-    bookings = bookings.filter((booking) => booking.eventId === eventId);
-  }
-
-  if (status) {
-    bookings = bookings.filter((booking) => booking.status === status);
-  }
-
-  bookings.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-
-  return paginate(bookings, { page, limit });
-}
-
-function getById(id) {
-  const booking = store.bookings.get(id);
-
-  if (!booking) {
+  if (!booking || booking.userId !== userId) {
     throw ApiError.notFound(`Booking not found: ${id}`);
   }
 
@@ -63,74 +39,72 @@ function getById(id) {
 }
 
 /**
- * Create a booking, enforcing the three business rules for this resource:
- * the event must exist, a user may hold only one active booking per event,
- * and the event's capacity must not be exceeded.
+ * Create a booking.
  *
- * All three live here rather than in the controller, so the same rules apply
- * no matter what calls the service.
+ * The three business rules — the event must exist, a user may hold only one
+ * active booking per event, and capacity must not be exceeded — are still the
+ * rules, but they are no longer *checked* here. They are decided inside one
+ * serializable transaction in the repository, because checking them in this
+ * layer would mean reading the database, deciding, and then writing: three
+ * steps with room between them for another request to take the last seat.
+ *
+ * What is left here is the translation from outcome to HTTP status, which is
+ * the part that genuinely belongs above the database.
  */
-function create({ eventId, seats, userId }) {
-  if (!eventService.exists(eventId)) {
-    throw ApiError.unprocessable(`Event not found: ${eventId}`, [
-      { field: 'eventId', message: 'eventId must reference an existing event' },
-    ]);
+async function create({ eventId, seats, userId }) {
+  const result = await bookingRepository.book({ eventId, seats, userId });
+
+  switch (result.outcome) {
+    case OUTCOME.CREATED:
+      return result.booking;
+
+    case OUTCOME.EVENT_NOT_FOUND:
+      throw ApiError.unprocessable(`Event not found: ${eventId}`, [
+        { field: 'eventId', message: 'eventId must reference an existing event' },
+      ]);
+
+    case OUTCOME.DUPLICATE:
+      throw ApiError.conflict('You already have an active booking for this event', [
+        { field: 'eventId', message: 'Duplicate booking for this user and event' },
+      ]);
+
+    case OUTCOME.SOLD_OUT:
+      throw ApiError.conflict('Not enough seats remaining for this event', [
+        {
+          field: 'seats',
+          message: `Requested ${seats}, but only ${result.remaining} seat(s) remain`,
+        },
+      ]);
+
+    default:
+      // Unreachable unless a new outcome is added without handling it here.
+      // Falling through silently would return 201 with no booking.
+      throw new Error(`Unhandled booking outcome: ${result.outcome}`);
   }
-
-  const event = eventService.getById(eventId);
-
-  if (findConfirmedBooking(eventId, userId)) {
-    throw ApiError.conflict('You already have an active booking for this event', [
-      { field: 'eventId', message: 'Duplicate booking for this user and event' },
-    ]);
-  }
-
-  const taken = confirmedSeatsFor(eventId);
-  const remaining = event.capacity - taken;
-
-  if (seats > remaining) {
-    throw ApiError.conflict('Not enough seats remaining for this event', [
-      { field: 'seats', message: `Requested ${seats}, but only ${remaining} seat(s) remain` },
-    ]);
-  }
-
-  const id = store.nextId('booking', 'bkg');
-  const booking = {
-    id,
-    eventId,
-    userId,
-    seats,
-    status: STATUS.CONFIRMED,
-    createdAt: new Date().toISOString(),
-    cancelledAt: null,
-  };
-
-  store.bookings.set(id, booking);
-  return booking;
 }
 
 /**
  * Soft delete: the record stays, its status flips to CANCELLED.
  *
  * Hard-deleting would destroy the audit trail and silently free the seats with
- * no record of who held them. Cancelling twice is a conflict, not a no-op, so
- * a double-submit is visible to the caller instead of looking like success.
+ * no record of who held them. Cancelling twice is a conflict, not a no-op, so a
+ * double-submit is visible to the caller instead of looking like success — and
+ * the repository decides that with a conditional UPDATE, so two simultaneous
+ * cancellations cannot both report success.
  */
-function cancel(id) {
-  const booking = getById(id);
+async function cancel(id, userId) {
+  // Ownership is established before anything is written. Cancelling first and
+  // checking after would let one request cancel a stranger's booking and then
+  // report a 404 about it.
+  await getById(id, userId);
 
-  if (booking.status === STATUS.CANCELLED) {
-    throw ApiError.conflict(`Booking is already cancelled: ${id}`);
-  }
+  const cancelled = await bookingRepository.cancel(id);
 
-  const cancelled = {
-    ...booking,
-    status: STATUS.CANCELLED,
-    cancelledAt: new Date().toISOString(),
-  };
+  if (cancelled) return cancelled;
 
-  store.bookings.set(id, cancelled);
-  return cancelled;
+  // Nothing was updated, and the row exists and is ours — so it was already
+  // cancelled. That is a conflict, not a not-found.
+  throw ApiError.conflict(`Booking is already cancelled: ${id}`);
 }
 
-module.exports = { STATUS, list, getById, create, cancel, confirmedSeatsFor };
+module.exports = { STATUS: BOOKING_STATUS, list, getById, create, cancel };

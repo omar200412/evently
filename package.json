@@ -1,18 +1,38 @@
 {
   "name": "evently",
   "version": "1.0.0",
-  "description": "Evently backend — events, venues and bookings API",
+  "description": "Evently backend — events, venues and bookings API on Postgres",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "db:local": "node scripts/local-postgres.js",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "prisma db seed",
+    "db:studio": "prisma studio",
+    "db:reset": "prisma migrate reset --force",
+    "with-db": "node scripts/with-local-db.js",
+    "prove:concurrency": "node scripts/with-local-db.js node scripts/parallel-bookings.js",
+    "prove:index": "node scripts/with-local-db.js node scripts/explain-index.js",
+    "verify:auth": "node scripts/with-local-db.js node scripts/verify-auth.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
+    "embedded-postgres": "^18.4.0-beta.17",
     "jest": "^29.7.0",
+    "prisma": "^7.9.1",
     "supertest": "^7.0.0"
   }
 }

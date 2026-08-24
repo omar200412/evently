@@ -5,34 +5,34 @@ const getRouteParam = require('../utils/getRouteParam');
 
 /**
  * Controllers are transport-only: read the request, call a service, choose a
- * status code. No business rules and no store access live here, which is why
- * moving to a database later would not touch this file.
+ * status code. No business rules and no database access live here — which is
+ * what kept this file to an `await` per handler when the store became Postgres.
  */
 
-function list(req, res) {
+async function list(req, res) {
   const { page, limit, venueId, from, to } = req.validated.query;
-  res.status(200).json(eventService.list({ page, limit, venueId, from, to }));
+  res.status(200).json(await eventService.list({ page, limit, venueId, from, to }));
 }
 
-function getOne(req, res) {
+async function getOne(req, res) {
   const id = getRouteParam(req, 'eventId');
-  res.status(200).json({ data: eventService.getById(id) });
+  res.status(200).json({ data: await eventService.getById(id) });
 }
 
-function create(req, res) {
-  const event = eventService.create(req.validated.body);
+async function create(req, res) {
+  const event = await eventService.create(req.validated.body, req.user.sub);
   res.status(201).json({ data: event });
 }
 
-function update(req, res) {
+async function update(req, res) {
   const id = getRouteParam(req, 'eventId');
-  const event = eventService.update(id, req.validated.body);
+  const event = await eventService.update(id, req.validated.body, req.user.sub);
   res.status(200).json({ data: event });
 }
 
-function remove(req, res) {
+async function remove(req, res) {
   const id = getRouteParam(req, 'eventId');
-  const event = eventService.remove(id);
+  const event = await eventService.remove(id, req.user.sub);
   res.status(200).json({ data: event });
 }
 

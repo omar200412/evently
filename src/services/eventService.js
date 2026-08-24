@@ -1,46 +1,42 @@
 'use strict';
 
-const store = require('../data/store');
+const eventRepository = require('../repositories/eventRepository');
+const venueRepository = require('../repositories/venueRepository');
 const ApiError = require('../utils/ApiError');
-const paginate = require('../utils/paginate');
-const venueService = require('./venueService');
 
-function toComparableTime(isoString) {
-  return new Date(isoString).getTime();
+/**
+ * Ownership — the object-level half of authorization.
+ *
+ * The route already established that the caller is an ORGANIZER. That says
+ * nothing about *this* event. Without this check, any organizer could edit or
+ * delete any other organizer's event by pasting its id into the URL, which is
+ * OWASP's number one API risk (BOLA) and the easiest one to ship by accident:
+ * every unit test passes, because every test uses its own data.
+ *
+ * It returns 404, not 403. A 403 confirms the event exists, which hands an
+ * attacker a way to enumerate ids they have no business knowing about. From the
+ * caller's side the two are the same anyway — there is nothing here for you.
+ */
+function assertOwnership(event, userId) {
+  if (event.organizerId !== userId) {
+    throw ApiError.notFound(`Event not found: ${event.id}`);
+  }
 }
 
 /**
  * List events, filtered then paginated.
  *
- * The order is deliberate. `total` has to describe the filtered set, because
- * that is what the client is paging through — filtering after slicing would
- * report a total for the unfiltered list and hand the client page numbers
- * that don't exist.
+ * Both now happen in SQL. The ordering guarantee that mattered in the in-memory
+ * version still holds and is still the reason to care: `total` describes the
+ * filtered set, because that is what the client is paging through. The
+ * repository runs the count with the same WHERE as the page for exactly that.
  */
 function list({ page, limit, venueId, from, to }) {
-  let events = [...store.events.values()];
-
-  if (venueId) {
-    events = events.filter((event) => event.venueId === venueId);
-  }
-
-  if (from) {
-    const fromTime = from.getTime();
-    events = events.filter((event) => toComparableTime(event.startsAt) >= fromTime);
-  }
-
-  if (to) {
-    const toTime = to.getTime();
-    events = events.filter((event) => toComparableTime(event.startsAt) <= toTime);
-  }
-
-  events.sort((a, b) => toComparableTime(a.startsAt) - toComparableTime(b.startsAt));
-
-  return paginate(events, { page, limit });
+  return eventRepository.listPaginated({ page, limit, venueId, from, to });
 }
 
-function getById(id) {
-  const event = store.events.get(id);
+async function getById(id) {
+  const event = await eventRepository.findById(id);
 
   if (!event) {
     throw ApiError.notFound(`Event not found: ${id}`);
@@ -49,58 +45,43 @@ function getById(id) {
   return event;
 }
 
-/** Existence check that does not throw — used by the booking service. */
-function exists(id) {
-  return store.events.has(id);
-}
-
-function create({ title, description, venueId, startsAt, capacity }) {
-  if (!venueService.exists(venueId)) {
+async function create({ title, description, venueId, startsAt, capacity }, organizerId) {
+  // Checked before inserting rather than left to the foreign key, so the client
+  // gets a 422 naming venueId instead of a constraint violation the error
+  // handler would have to report as a 500.
+  if (!(await venueRepository.exists(venueId))) {
     throw ApiError.unprocessable(`Venue not found: ${venueId}`, [
       { field: 'venueId', message: 'venueId must reference an existing venue' },
     ]);
   }
 
-  const id = store.nextId('event', 'evt');
-  const event = {
-    id,
-    title,
-    description: description ?? '',
-    venueId,
-    startsAt: startsAt.toISOString(),
-    capacity,
-  };
-
-  store.events.set(id, event);
-  return event;
+  // organizerId comes from the verified token, never from the body. An owner a
+  // client can nominate is not ownership.
+  return eventRepository.create({ title, description, venueId, startsAt, capacity, organizerId });
 }
 
-function update(id, changes) {
-  const event = getById(id);
+async function update(id, changes, userId) {
+  // getById first so a missing event is a 404 naming the event, not a Prisma
+  // "record to update not found" reaching the error handler as a 500.
+  const event = await getById(id);
 
-  if (changes.venueId !== undefined && !venueService.exists(changes.venueId)) {
+  assertOwnership(event, userId);
+
+  if (changes.venueId !== undefined && !(await venueRepository.exists(changes.venueId))) {
     throw ApiError.unprocessable(`Venue not found: ${changes.venueId}`, [
       { field: 'venueId', message: 'venueId must reference an existing venue' },
     ]);
   }
 
-  const updated = {
-    ...event,
-    ...(changes.title !== undefined && { title: changes.title }),
-    ...(changes.description !== undefined && { description: changes.description }),
-    ...(changes.venueId !== undefined && { venueId: changes.venueId }),
-    ...(changes.startsAt !== undefined && { startsAt: changes.startsAt.toISOString() }),
-    ...(changes.capacity !== undefined && { capacity: changes.capacity }),
-  };
-
-  store.events.set(id, updated);
-  return updated;
+  return eventRepository.update(id, changes);
 }
 
-function remove(id) {
-  const event = getById(id);
-  store.events.delete(id);
-  return event;
+async function remove(id, userId) {
+  const event = await getById(id);
+
+  assertOwnership(event, userId);
+
+  return eventRepository.remove(id);
 }
 
-module.exports = { list, getById, exists, create, update, remove };
+module.exports = { list, getById, create, update, remove };

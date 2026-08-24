@@ -6,12 +6,13 @@ const {
   rejectUnknownFields,
   readString,
   readInt,
+  readUuid,
 } = require('../utils/validation');
 const ApiError = require('../utils/ApiError');
 const { parsePagination } = require('./queryValidators');
-const { STATUS } = require('../services/bookingService');
+const { BOOKING_STATUSES } = require('../domain');
 
-// userId is deliberately absent. It comes from config.currentUserId, so a
+// userId is deliberately absent. It comes from the verified access token, so a
 // client that sends one gets a 400 for an unknown field rather than being
 // allowed to book on someone else's behalf.
 const CREATE_FIELDS = ['eventId', 'seats'];
@@ -27,7 +28,7 @@ function validateCreateBookingBody(body) {
 
   rejectUnknownFields(body, CREATE_FIELDS, bag);
 
-  const eventId = readString(body, 'eventId', bag, { required: true, max: 64 });
+  const eventId = readUuid(body, 'eventId', bag, { required: true });
   const seats = readInt(body, 'seats', bag, {
     required: true,
     min: 1,
@@ -45,11 +46,11 @@ function validateListBookingsQuery(query) {
   rejectUnknownFields(query, QUERY_FIELDS, bag);
 
   const { page, limit } = parsePagination(query, bag);
-  const eventId = readString(query, 'event', bag, { max: 64 });
+  const eventId = readUuid(query, 'event', bag);
   const status = readString(query, 'status', bag, { max: 32 });
 
-  if (status !== undefined && !Object.keys(STATUS).includes(status)) {
-    bag.add('status', `status must be one of: ${Object.keys(STATUS).join(', ')}`);
+  if (status !== undefined && !BOOKING_STATUSES.includes(status)) {
+    bag.add('status', `status must be one of: ${BOOKING_STATUSES.join(', ')}`);
   }
 
   bag.throwIfAny('Invalid query parameters');
