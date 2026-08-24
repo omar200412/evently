@@ -5,6 +5,25 @@ const venueRepository = require('../repositories/venueRepository');
 const ApiError = require('../utils/ApiError');
 
 /**
+ * Ownership — the object-level half of authorization.
+ *
+ * The route already established that the caller is an ORGANIZER. That says
+ * nothing about *this* event. Without this check, any organizer could edit or
+ * delete any other organizer's event by pasting its id into the URL, which is
+ * OWASP's number one API risk (BOLA) and the easiest one to ship by accident:
+ * every unit test passes, because every test uses its own data.
+ *
+ * It returns 404, not 403. A 403 confirms the event exists, which hands an
+ * attacker a way to enumerate ids they have no business knowing about. From the
+ * caller's side the two are the same anyway — there is nothing here for you.
+ */
+function assertOwnership(event, userId) {
+  if (event.organizerId !== userId) {
+    throw ApiError.notFound(`Event not found: ${event.id}`);
+  }
+}
+
+/**
  * List events, filtered then paginated.
  *
  * Both now happen in SQL. The ordering guarantee that mattered in the in-memory
@@ -26,7 +45,7 @@ async function getById(id) {
   return event;
 }
 
-async function create({ title, description, venueId, startsAt, capacity }) {
+async function create({ title, description, venueId, startsAt, capacity }, organizerId) {
   // Checked before inserting rather than left to the foreign key, so the client
   // gets a 422 naming venueId instead of a constraint violation the error
   // handler would have to report as a 500.
@@ -36,13 +55,17 @@ async function create({ title, description, venueId, startsAt, capacity }) {
     ]);
   }
 
-  return eventRepository.create({ title, description, venueId, startsAt, capacity });
+  // organizerId comes from the verified token, never from the body. An owner a
+  // client can nominate is not ownership.
+  return eventRepository.create({ title, description, venueId, startsAt, capacity, organizerId });
 }
 
-async function update(id, changes) {
+async function update(id, changes, userId) {
   // getById first so a missing event is a 404 naming the event, not a Prisma
   // "record to update not found" reaching the error handler as a 500.
-  await getById(id);
+  const event = await getById(id);
+
+  assertOwnership(event, userId);
 
   if (changes.venueId !== undefined && !(await venueRepository.exists(changes.venueId))) {
     throw ApiError.unprocessable(`Venue not found: ${changes.venueId}`, [
@@ -53,8 +76,11 @@ async function update(id, changes) {
   return eventRepository.update(id, changes);
 }
 
-async function remove(id) {
-  await getById(id);
+async function remove(id, userId) {
+  const event = await getById(id);
+
+  assertOwnership(event, userId);
+
   return eventRepository.remove(id);
 }
 

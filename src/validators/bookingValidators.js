@@ -12,7 +12,7 @@ const ApiError = require('../utils/ApiError');
 const { parsePagination } = require('./queryValidators');
 const { BOOKING_STATUSES } = require('../domain');
 
-// userId is deliberately absent. It comes from config.currentUserId, so a
+// userId is deliberately absent. It comes from the verified access token, so a
 // client that sends one gets a 400 for an unknown field rather than being
 // allowed to book on someone else's behalf.
 const CREATE_FIELDS = ['eventId', 'seats'];

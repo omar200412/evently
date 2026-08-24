@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../src/app');
 const { prisma } = require('../src/db/prisma');
-const { reset, disconnect, SEED, VENUE_IDS } = require('./helpers');
+const { reset, disconnect, SEED, VENUE_IDS, ORGANIZER_A, tokenFor } = require('./helpers');
 
 /**
  * The test this whole session exists for.
@@ -26,9 +26,12 @@ afterAll(() => disconnect());
 const CAPACITY = 5;
 const BOOKERS = 20;
 
+const bearer = (user) => ({ Authorization: `Bearer ${tokenFor(user)}` });
+
 async function createCapacityEvent() {
   const res = await request(app)
     .post('/v1/events')
+    .set(bearer(ORGANIZER_A))
     .send({
       title: 'Concurrency Proof',
       venueId: VENUE_IDS[0],
@@ -47,8 +50,11 @@ async function createCapacityEvent() {
  * exactly the scenario that never had a bug.
  */
 function bookInParallel(eventId, seats) {
+  // Twenty real access tokens for twenty real accounts. Session 3 did this with
+  // an x-user-id header, which no longer exists — the proof now goes through
+  // signature verification like any other request, which is the point.
   const attempts = SEED.parallelUsers.slice(0, BOOKERS).map((user) =>
-    request(app).post('/v1/bookings').set('x-user-id', user.id).send({ eventId, seats })
+    request(app).post('/v1/bookings').set(bearer(user)).send({ eventId, seats })
   );
 
   return Promise.all(attempts);
@@ -112,10 +118,7 @@ describe('concurrent bookings', () => {
     // database refuses the second insert.
     const responses = await Promise.all(
       Array.from({ length: 5 }, () =>
-        request(app)
-          .post('/v1/bookings')
-          .set('x-user-id', user.id)
-          .send({ eventId: event.id, seats: 1 })
+        request(app).post('/v1/bookings').set(bearer(user)).send({ eventId: event.id, seats: 1 })
       )
     );
 

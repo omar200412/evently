@@ -6,14 +6,32 @@ const { BOOKING_STATUS } = require('../domain');
 
 const { OUTCOME } = bookingRepository;
 
-function list({ page, limit, eventId, status }) {
-  return bookingRepository.listPaginated({ page, limit, eventId, status });
+/**
+ * List the caller's bookings.
+ *
+ * `userId` is a mandatory parameter, not an optional filter, and it comes from
+ * the token. That is the difference between a scoped collection and an
+ * information leak: an endpoint that lists everything and merely *offers* a user
+ * filter hands over every booking in the system to anyone who omits it — the
+ * collection-level form of BOLA, and the one most often missed, because the
+ * single-resource route usually gets the ownership check and the list does not.
+ */
+function list({ page, limit, eventId, status, userId }) {
+  return bookingRepository.listPaginated({ page, limit, eventId, status, userId });
 }
 
-async function getById(id) {
+/**
+ * Fetch a booking the caller is entitled to see.
+ *
+ * 404 rather than 403 for someone else's booking, for the same reason as
+ * events: a 403 would confirm the id is real. Note that the ownership check is
+ * inside getById rather than bolted onto each caller — cancel() goes through
+ * here too, so there is one place to get it right instead of two to keep in step.
+ */
+async function getById(id, userId) {
   const booking = await bookingRepository.findById(id);
 
-  if (!booking) {
+  if (!booking || booking.userId !== userId) {
     throw ApiError.notFound(`Booking not found: ${id}`);
   }
 
@@ -74,19 +92,18 @@ async function create({ eventId, seats, userId }) {
  * the repository decides that with a conditional UPDATE, so two simultaneous
  * cancellations cannot both report success.
  */
-async function cancel(id) {
+async function cancel(id, userId) {
+  // Ownership is established before anything is written. Cancelling first and
+  // checking after would let one request cancel a stranger's booking and then
+  // report a 404 about it.
+  await getById(id, userId);
+
   const cancelled = await bookingRepository.cancel(id);
 
   if (cancelled) return cancelled;
 
-  // Nothing was updated. Either the booking does not exist, or it was already
-  // cancelled — and those are different answers for the client.
-  const existing = await bookingRepository.findById(id);
-
-  if (!existing) {
-    throw ApiError.notFound(`Booking not found: ${id}`);
-  }
-
+  // Nothing was updated, and the row exists and is ours — so it was already
+  // cancelled. That is a conflict, not a not-found.
   throw ApiError.conflict(`Booking is already cancelled: ${id}`);
 }
 

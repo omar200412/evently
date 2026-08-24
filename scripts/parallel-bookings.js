@@ -10,12 +10,19 @@ const app = require('../src/app');
 const { prisma, disconnect } = require('../src/db/prisma');
 const { SEED, reset } = require('../prisma/seed');
 const { getStats, resetStats } = require('../src/db/transaction');
+const jwt = require('../src/auth/jwt');
+
+/** A real access token for a seeded account — the same one login would mint. */
+function bearer(user) {
+  return `Bearer ${jwt.sign({ userId: user.id, role: user.role })}`;
+}
 
 /**
  * The overselling proof.
  *
  * Twenty people send a booking request for the same five-seat event at the same
- * moment, over real HTTP, through the whole stack. If the capacity check were
+ * moment, over real HTTP, through the whole stack — each with their own signed
+ * access token, so authentication and authorization run on every one of them. If the capacity check were
  * still a read followed by a write — the way the in-memory version did it —
  * most of them would read "5 remaining" before any of them had written, and the
  * event would sell somewhere north of five seats.
@@ -38,7 +45,11 @@ function heading(text) {
 async function createEvent(baseUrl) {
   const res = await fetch(`${baseUrl}/v1/events`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      // Creating an event needs the ORGANIZER role now.
+      authorization: bearer(SEED.users[0]),
+    },
     body: JSON.stringify({
       title: 'Concurrency Proof',
       venueId: SEED.venues[0].id,
@@ -63,7 +74,7 @@ function fireAllAtOnce(baseUrl, eventId) {
 
     const res = await fetch(`${baseUrl}/v1/bookings`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-user-id': user.id },
+      headers: { 'content-type': 'application/json', authorization: bearer(user) },
       body: JSON.stringify({ eventId, seats: SEATS_EACH }),
     });
 

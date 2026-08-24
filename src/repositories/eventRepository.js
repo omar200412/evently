@@ -48,9 +48,9 @@ function findById(id) {
   return prisma.event.findUnique({ where: { id } });
 }
 
-function create({ title, description, venueId, startsAt, capacity }) {
+function create({ title, description, venueId, startsAt, capacity, organizerId }) {
   return prisma.event.create({
-    data: { title, description: description ?? '', venueId, startsAt, capacity },
+    data: { title, description: description ?? '', venueId, startsAt, capacity, organizerId },
   });
 }
 

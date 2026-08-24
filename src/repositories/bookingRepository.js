@@ -21,8 +21,9 @@ const OUTCOME = Object.freeze({
   SOLD_OUT: 'SOLD_OUT',
 });
 
-async function listPaginated({ page, limit, eventId, status }) {
+async function listPaginated({ page, limit, eventId, status, userId }) {
   const where = {
+    userId,
     ...(eventId && { eventId }),
     ...(status && { status }),
   };

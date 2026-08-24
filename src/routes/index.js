@@ -4,6 +4,7 @@ const express = require('express');
 const eventRoutes = require('./eventRoutes');
 const venueRoutes = require('./venueRoutes');
 const bookingRoutes = require('./bookingRoutes');
+const authRoutes = require('./authRoutes');
 const asyncHandler = require('../utils/asyncHandler');
 const { prisma } = require('../db/prisma');
 
@@ -29,6 +30,7 @@ router.get(
   })
 );
 
+router.use('/auth', authRoutes);
 router.use('/events', eventRoutes);
 router.use('/venues', venueRoutes);
 router.use('/bookings', bookingRoutes);

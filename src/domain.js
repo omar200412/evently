@@ -21,4 +21,18 @@ const BOOKING_STATUS = Object.freeze({
 
 const BOOKING_STATUSES = Object.freeze(Object.keys(BOOKING_STATUS));
 
-module.exports = { BOOKING_STATUS, BOOKING_STATUSES };
+/**
+ * Roles, matching the Role enum in prisma/schema.prisma.
+ *
+ * ATTENDEE is the default and the floor: signing up gets you an account that can
+ * book, and nothing more. ORGANIZER is granted, never self-selected — a signup
+ * body that could set its own role would make the whole distinction decorative.
+ */
+const ROLE = Object.freeze({
+  ATTENDEE: 'ATTENDEE',
+  ORGANIZER: 'ORGANIZER',
+});
+
+const ROLES = Object.freeze(Object.keys(ROLE));
+
+module.exports = { BOOKING_STATUS, BOOKING_STATUSES, ROLE, ROLES };

@@ -20,19 +20,19 @@ async function getOne(req, res) {
 }
 
 async function create(req, res) {
-  const event = await eventService.create(req.validated.body);
+  const event = await eventService.create(req.validated.body, req.user.sub);
   res.status(201).json({ data: event });
 }
 
 async function update(req, res) {
   const id = getRouteParam(req, 'eventId');
-  const event = await eventService.update(id, req.validated.body);
+  const event = await eventService.update(id, req.validated.body, req.user.sub);
   res.status(200).json({ data: event });
 }
 
 async function remove(req, res) {
   const id = getRouteParam(req, 'eventId');
-  const event = await eventService.remove(id);
+  const event = await eventService.remove(id, req.user.sub);
   res.status(200).json({ data: event });
 }
 

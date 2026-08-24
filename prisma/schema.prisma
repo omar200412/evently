@@ -20,6 +20,13 @@ enum BookingStatus {
   CANCELLED
 }
 
+/// Who may do what. ATTENDEE is the default because signup must not be a way to
+/// grant yourself the ability to publish events — role is assigned, never taken.
+enum Role {
+  ATTENDEE
+  ORGANIZER
+}
+
 model Venue {
   id       String @id @default(uuid()) @db.Uuid
   name     String @db.VarChar(200)
@@ -37,9 +44,53 @@ model User {
   email String @unique @db.VarChar(255)
   name  String @db.VarChar(200)
 
-  bookings Booking[]
+  /// bcrypt output, never the password. The column name says hash so that a
+  /// query written half-asleep cannot quietly select a plaintext secret — and
+  /// nothing serialises this field: responses are built from an explicit
+  /// allowlist in src/auth/user.dto.js rather than by spreading the row.
+  passwordHash String @map("password_hash") @db.VarChar(255)
+
+  role      Role     @default(ATTENDEE)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  bookings        Booking[]
+  organizedEvents Event[]        @relation("EventOrganizer")
+  refreshTokens   RefreshToken[]
 
   @@map("users")
+}
+
+/// Refresh tokens, stored the way passwords are: hashed.
+///
+/// The token itself is opaque random bytes — not a JWT — because it needs to be
+/// revocable, and a self-contained token cannot be taken back before it expires.
+/// Only its SHA-256 hash is stored, so a dump of this table does not let anyone
+/// mint sessions.
+///
+/// Rotation is the point of `replacedById`. Every refresh issues a new token and
+/// retires the old one, which means a stolen token is only useful until the
+/// real user refreshes. After that the thief presents a token that is already
+/// revoked — and that attempt is the signal that something was stolen.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.VarChar(64)
+  userId    String    @map("user_id") @db.Uuid
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  /// The token issued in this one's place. Following the chain is how a reuse
+  /// attempt is traced back to the whole compromised family.
+  replacedById String?       @unique @map("replaced_by_id") @db.Uuid
+  replacedBy   RefreshToken? @relation("TokenRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaces     RefreshToken? @relation("TokenRotation")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Revoking a whole family and listing a user's sessions both filter by user.
+  @@index([userId])
+  @@map("refresh_tokens")
 }
 
 model Event {
@@ -47,6 +98,10 @@ model Event {
   title       String   @db.VarChar(200)
   description String   @default("") @db.VarChar(2000)
   venueId     String   @map("venue_id") @db.Uuid
+  /// Who may edit this event. Set from the authenticated caller at creation and
+  /// never accepted from a request body — an organizer_id a client can choose is
+  /// not an ownership check, it is a suggestion.
+  organizerId String   @map("organizer_id") @db.Uuid
   startsAt    DateTime @map("starts_at") @db.Timestamptz(3)
   capacity    Int
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -55,13 +110,17 @@ model Event {
   // DELETE /v1/events/:id is a hard delete, so the bookings that point at the
   // event have to go with it — a booking for an event that no longer exists is
   // not history, it is a dangling row.
-  venue    Venue     @relation(fields: [venueId], references: [id], onDelete: Restrict)
-  bookings Booking[]
+  venue     Venue     @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  organizer User      @relation("EventOrganizer", fields: [organizerId], references: [id], onDelete: Restrict)
+  bookings  Booking[]
 
   // Every list query orders by startsAt and optionally filters by venue, so
   // these two cover the read path without a sort step.
   @@index([startsAt])
   @@index([venueId, startsAt])
+  /// "events I organise" is a real lookup, and unlike bookings.user_id in
+  /// session 3 there is no compound index leading with organizer_id to serve it.
+  @@index([organizerId])
   @@map("events")
 }
 

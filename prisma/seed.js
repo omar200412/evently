@@ -1,6 +1,9 @@
 'use strict';
 
+const bcrypt = require('bcryptjs');
 const { prisma, disconnect } = require('../src/db/prisma');
+const config = require('../src/config');
+const { ROLE } = require('../src/domain');
 
 /**
  * Seed data.
@@ -29,10 +32,32 @@ function seedId(group, n) {
   return `${group}-0000-4000-8000-${String(n).padStart(12, '0')}`;
 }
 
+/**
+ * One password for every seeded account, and it is not a secret — it is fixture
+ * data, published in the README so the API is usable the moment it starts.
+ *
+ * Hashed once per process rather than once per user. bcrypt is deliberately
+ * slow, the test suite re-seeds before every case, and hashing 23 accounts each
+ * time would add minutes to a run for no coverage at all. Real signups go
+ * through password.hash() and get their own salt; this shortcut exists only
+ * because these rows are known and fake.
+ */
+const SEED_PASSWORD = 'evently-dev-password';
+
+let cachedHash;
+
+function seedPasswordHash() {
+  if (!cachedHash) cachedHash = bcrypt.hashSync(SEED_PASSWORD, config.auth.bcryptRounds);
+  return cachedHash;
+}
+
+// Two organizers, not one. A single organizer cannot demonstrate the thing that
+// matters most about ownership — that one of them may not touch the other's
+// events — and the BOLA tests need both sides of that.
 const users = [
-  { id: seedId(USERS, 1), email: 'omar@evently.test', name: 'Omar Khalefa' },
-  { id: seedId(USERS, 2), email: 'nour@evently.test', name: 'Nour Adel' },
-  { id: seedId(USERS, 3), email: 'sara@evently.test', name: 'Sara Mostafa' },
+  { id: seedId(USERS, 1), email: 'omar@evently.test', name: 'Omar Khalefa', role: ROLE.ORGANIZER },
+  { id: seedId(USERS, 2), email: 'nour@evently.test', name: 'Nour Adel', role: ROLE.ORGANIZER },
+  { id: seedId(USERS, 3), email: 'sara@evently.test', name: 'Sara Mostafa', role: ROLE.ATTENDEE },
 ];
 
 const venues = [
@@ -84,10 +109,13 @@ const events = [
     startsAt: '2026-12-31T21:00:00.000Z',
     capacity: 500,
   },
-].map((event) => ({
+].map((event, index) => ({
   ...event,
   description: `${event.title} at Evently.`,
   startsAt: new Date(event.startsAt),
+  // Alternating owners, so half the catalogue belongs to each organizer and a
+  // test can always find an event the caller does not own.
+  organizerId: index % 2 === 0 ? users[0].id : users[1].id,
 }));
 
 /**
@@ -101,13 +129,17 @@ const parallelUsers = Array.from({ length: 20 }, (unused, index) => ({
   id: seedId(PARALLEL_USERS, index + 1),
   email: `parallel-${index + 1}@evently.test`,
   name: `Parallel Tester ${index + 1}`,
+  role: ROLE.ATTENDEE,
 }));
 
 const SEED = { users, venues, events, parallelUsers };
 
 async function seed() {
+  const passwordHash = seedPasswordHash();
+
   for (const user of [...users, ...parallelUsers]) {
-    await prisma.user.upsert({ where: { id: user.id }, update: user, create: user });
+    const row = { ...user, passwordHash };
+    await prisma.user.upsert({ where: { id: row.id }, update: row, create: row });
   }
 
   for (const venue of venues) {
@@ -128,12 +160,13 @@ async function seed() {
  */
 async function reset() {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "bookings", "events", "venues", "users" RESTART IDENTITY CASCADE'
+    'TRUNCATE TABLE "refresh_tokens", "bookings", "events", "venues", "users" ' +
+      'RESTART IDENTITY CASCADE'
   );
   await seed();
 }
 
-module.exports = { SEED, seed, reset };
+module.exports = { SEED, SEED_PASSWORD, seed, reset };
 
 // Only run when invoked directly (`prisma db seed`), not when required by tests.
 if (require.main === module) {

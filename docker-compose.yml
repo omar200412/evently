@@ -30,6 +30,14 @@ services:
       DATABASE_URL: postgresql://evently:evently@db:5432/evently?schema=public
       PORT: 3000
       NODE_ENV: development
+      # Taken from your shell or .env, with a development fallback so
+      # `docker compose up` works on a fresh clone. The fallback is fine only
+      # because NODE_ENV is development here — config.js requires a real secret
+      # and refuses obvious placeholders, and a production compose file must
+      # supply its own.
+      JWT_SECRET: ${JWT_SECRET:-dev-only-compose-secret-replace-before-any-real-use}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
+      COOKIE_SECURE: "false"
     ports:
       - '3000:3000'
     volumes:

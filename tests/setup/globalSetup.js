@@ -26,6 +26,13 @@ module.exports = async function globalSetup() {
 
   process.env.NODE_ENV = 'test';
 
+  // So `npm test` works on a fresh clone with no .env. A throwaway value is
+  // right here and nowhere else: these tokens live for the length of one test
+  // run and are never trusted by anything outside it.
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = 'test-only-secret-not-for-any-real-deployment';
+  }
+
   // migrate deploy, not migrate dev: the suite applies the migrations that are
   // committed, exactly as production would. If a migration is missing or broken
   // the tests fail here rather than passing against a schema Prisma helpfully

@@ -15,13 +15,18 @@
     "db:reset": "prisma migrate reset --force",
     "with-db": "node scripts/with-local-db.js",
     "prove:concurrency": "node scripts/with-local-db.js node scripts/parallel-bookings.js",
-    "prove:index": "node scripts/with-local-db.js node scripts/explain-index.js"
+    "prove:index": "node scripts/with-local-db.js node scripts/explain-index.js",
+    "verify:auth": "node scripts/with-local-db.js node scripts/verify-auth.js"
   },
   "dependencies": {
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.0"
   },
   "devDependencies": {

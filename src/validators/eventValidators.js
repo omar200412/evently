@@ -12,6 +12,9 @@ const {
 const ApiError = require('../utils/ApiError');
 const { parsePagination } = require('./queryValidators');
 
+// organizerId is deliberately absent, for the same reason userId is absent from
+// a booking body: ownership comes from the access token. A client that sends one
+// gets a 400 naming the field rather than a quietly ignored escalation attempt.
 const CREATE_FIELDS = ['title', 'description', 'venueId', 'startsAt', 'capacity'];
 const QUERY_FIELDS = ['page', 'limit', 'venue', 'from', 'to'];
 
