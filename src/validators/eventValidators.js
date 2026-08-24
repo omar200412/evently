@@ -6,6 +6,7 @@ const {
   rejectUnknownFields,
   readString,
   readInt,
+  readUuid,
   readIsoDate,
 } = require('../utils/validation');
 const ApiError = require('../utils/ApiError');
@@ -20,7 +21,7 @@ function validateListEventsQuery(query) {
   rejectUnknownFields(query, QUERY_FIELDS, bag);
 
   const { page, limit } = parsePagination(query, bag);
-  const venueId = readString(query, 'venue', bag, { max: 64 });
+  const venueId = readUuid(query, 'venue', bag);
   const from = readIsoDate(query, 'from', bag);
   const to = readIsoDate(query, 'to', bag);
 
@@ -47,7 +48,7 @@ function validateCreateEventBody(body) {
 
   const title = readString(body, 'title', bag, { required: true, min: 3, max: 200 });
   const description = readString(body, 'description', bag, { min: 0, max: 2000 });
-  const venueId = readString(body, 'venueId', bag, { required: true, max: 64 });
+  const venueId = readUuid(body, 'venueId', bag, { required: true });
   const startsAt = readIsoDate(body, 'startsAt', bag, { required: true });
   const capacity = readInt(body, 'capacity', bag, { required: true, min: 1, max: 100000 });
 
@@ -67,7 +68,7 @@ function validateUpdateEventBody(body) {
 
   const title = readString(body, 'title', bag, { min: 3, max: 200 });
   const description = readString(body, 'description', bag, { min: 0, max: 2000 });
-  const venueId = readString(body, 'venueId', bag, { max: 64 });
+  const venueId = readUuid(body, 'venueId', bag);
   const startsAt = readIsoDate(body, 'startsAt', bag);
   const capacity = readInt(body, 'capacity', bag, { min: 1, max: 100000 });
 

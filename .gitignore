@@ -2,3 +2,11 @@ node_modules/
 coverage/
 .env
 .DS_Store
+
+# Generated Prisma client — rebuilt from prisma/schema.prisma by `prisma generate`.
+src/generated/
+.prisma/
+
+# Local Postgres data directories: .pgdata for development, .pgdata-test for
+# the cluster the test suite starts and stops on its own.
+.pgdata*/

@@ -1,6 +1,7 @@
 'use strict';
 
 const ApiError = require('./ApiError');
+const isUuid = require('./isUuid');
 
 /**
  * Collects every problem with an input before throwing, so the client gets
@@ -103,6 +104,37 @@ function readInt(input, name, bag, { required = false, min, max, fallback } = {}
   return asNumber;
 }
 
+/**
+ * Read a value that has to be a UUID.
+ *
+ * Ids became UUIDs when the store became Postgres, and a uuid column cannot be
+ * compared against arbitrary text — the driver raises a type error rather than
+ * returning no rows. Catching the shape here turns what would surface as a 500
+ * into a 400 naming the field.
+ */
+function readUuid(input, name, bag, { required = false } = {}) {
+  const value = input[name];
+
+  if (value === undefined || value === null || value === '') {
+    if (required) bag.add(name, `${name} is required`);
+    return undefined;
+  }
+
+  if (typeof value !== 'string') {
+    bag.add(name, `${name} must be a string`);
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  if (!isUuid(trimmed)) {
+    bag.add(name, `${name} must be a UUID`);
+    return undefined;
+  }
+
+  return trimmed;
+}
+
 function readIsoDate(input, name, bag, { required = false } = {}) {
   const value = input[name];
 
@@ -132,5 +164,6 @@ module.exports = {
   rejectUnknownFields,
   readString,
   readInt,
+  readUuid,
   readIsoDate,
 };

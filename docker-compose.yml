@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: evently-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: evently
+      POSTGRES_PASSWORD: evently
+      POSTGRES_DB: evently
+    ports:
+      - '5432:5432'
+    volumes:
+      - evently-pgdata:/var/lib/postgresql/data
+    # The API's start command runs migrations, so it must not run before the
+    # server is actually accepting connections — not merely up.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U evently -d evently']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    container_name: evently-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://evently:evently@db:5432/evently?schema=public
+      PORT: 3000
+      NODE_ENV: development
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+      - ./scripts:/app/scripts
+      # Keep the image's node_modules: the host's are built for a different
+      # platform and would shadow the Linux binaries Prisma needs.
+      - /app/node_modules
+    command: sh -c "npx prisma migrate deploy && node --watch src/server.js"
+
+volumes:
+  evently-pgdata:
